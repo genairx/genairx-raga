@@ -1329,9 +1329,11 @@ class ProcessorMixin:
                     }
                 )
                 await self.lightrag.doc_status.index_done_callback()
-                self.logger.debug(
+                self.logger.info(
                     f"Marked multimodal content processing as complete for document {doc_id}"
                 )
+            else:
+                raise Exception(f"Document {doc_id} not found in doc_status to mark multimodal processing complete")
         except Exception as e:
             self.logger.warning(
                 f"Error marking multimodal processing as complete for document {doc_id}: {e}"

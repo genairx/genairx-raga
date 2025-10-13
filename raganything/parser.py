@@ -818,6 +818,12 @@ class MineruParser(Parser):
             json_file = file_stem_subdir / method / f"{file_stem}_content_list.json"
             images_base_dir = file_stem_subdir / method
 
+        logging.info(f"Checking output files for {file_stem} using method '{method}'")
+        logging.info(f"  md_file: {md_file} {'found' if md_file.exists() else 'not found'}")
+        logging.info(f"  json_file: {json_file} {'found' if json_file.exists() else 'not found'}")
+        logging.info(f"  images_base_dir: {images_base_dir} {'found' if images_base_dir.exists() else 'not found'}")
+        logging.info(f"  source_path: {source_path} {'found' if source_path and source_path.exists() else 'not found or not provided'}")
+
         # Check for file existence and freshness if source_path is provided
         if source_path:
             if md_file.exists() and json_file.exists():
@@ -828,8 +834,10 @@ class MineruParser(Parser):
                         f"Found fresh output for {source_path.name}, skipping regeneration."
                     )
                 else:
+                    logging.info(f"  stale output for {source_path.name}, regenerating.")
                     return None, ""  # Output is stale
             else:
+                logging.info(f"  stale output for {source_path.name}, regenerating.")
                 return None, ""  # Output does not exist
 
         # Read markdown content
@@ -908,9 +916,11 @@ class MineruParser(Parser):
             backend = kwargs.get("backend", "")
             check_method = "vlm" if backend.startswith("vlm-") else method
             content_list, _ = self._read_output_files(
-                base_output_dir, name_without_suff, method=check_method, source_path=pdf_path
+                base_output_dir, name_without_suff, method=check_method
             )
-            if content_list is not None:
+            logging.info(f"Checked for existing output in {base_output_dir} {name_without_suff} {content_list and True}")
+            if content_list:
+                logging.info(f"  Using existing output for {pdf_path.name}")
                 return content_list
 
             base_output_dir.mkdir(parents=True, exist_ok=True)
