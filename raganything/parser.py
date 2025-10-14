@@ -658,14 +658,17 @@ class MineruParser(Parser):
             # Log the command being executed
             logging.info(f"Executing mineru command: {' '.join(cmd)}")
 
-            subprocess_kwargs = {
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "encoding": "utf-8",
-                "errors": "ignore",
-                "bufsize": 1,  # Line buffered
-            }
+            subprocess_kwargs = {}
+            orig_log = False.  # turn off output capture so the progress bars work..
+            if orig_log:
+                subprocess_kwargs = {
+                    "stdout":  subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "encoding": "utf-8",
+                    "errors": "ignore",
+                    "bufsize": 1,  # Line buffered
+                }
 
             # Hide console window on Windows
             if platform.system() == "Windows":
@@ -684,40 +687,69 @@ class MineruParser(Parser):
             # Start subprocess
             process = subprocess.Popen(cmd, **subprocess_kwargs)
 
-            # Create queues for stdout and stderr
-            stdout_queue = Queue()
-            stderr_queue = Queue()
+            if orig_log:
+                # Create queues for stdout and stderr
+                stdout_queue = Queue()
+                stderr_queue = Queue()
 
-            # Start threads to read output
-            stdout_thread = threading.Thread(
-                target=enqueue_output, args=(process.stdout, stdout_queue, "STDOUT")
-            )
-            stderr_thread = threading.Thread(
-                target=enqueue_output, args=(process.stderr, stderr_queue, "STDERR")
-            )
+                # Start threads to read output
+                stdout_thread = threading.Thread(
+                    target=enqueue_output, args=(process.stdout, stdout_queue, "STDOUT")
+                )
+                stderr_thread = threading.Thread(
+                    target=enqueue_output, args=(process.stderr, stderr_queue, "STDERR")
+                )
 
-            stdout_thread.daemon = True
-            stderr_thread.daemon = True
-            stdout_thread.start()
-            stderr_thread.start()
+                stdout_thread.daemon = True
+                stderr_thread.daemon = True
+                stdout_thread.start()
+                stderr_thread.start()
 
-            # Process output in real time
-            while process.poll() is None:
-                # Check stdout queue
+                # Process output in real time
+                while process.poll() is None:
+                    # Check stdout queue
+                    try:
+                        while True:
+                            prefix, line = stdout_queue.get_nowait()
+                            output_lines.append(line)
+                            # Log mineru output with INFO level, prefixed with [MinerU]
+                            logging.info(f"[MinerU] {line}")
+                    except Empty:
+                        pass
+
+                    # Check stderr queue
+                    try:
+                        while True:
+                            prefix, line = stderr_queue.get_nowait()
+                            # Log mineru errors with WARNING level
+                            if "warning" in line.lower():
+                                logging.warning(f"[MinerU] {line}")
+                            elif "error" in line.lower():
+                                logging.error(f"[MinerU] {line}")
+                                error_message = line.split("\n")[0]
+                                error_lines.append(error_message)
+                            else:
+                                logging.info(f"[MinerU] {line}")
+                    except Empty:
+                        pass
+
+                    # Small delay to prevent busy waiting
+                    import time
+
+                    time.sleep(0.1)
+
+                # Process any remaining output after process completion
                 try:
                     while True:
                         prefix, line = stdout_queue.get_nowait()
                         output_lines.append(line)
-                        # Log mineru output with INFO level, prefixed with [MinerU]
                         logging.info(f"[MinerU] {line}")
                 except Empty:
                     pass
 
-                # Check stderr queue
                 try:
                     while True:
                         prefix, line = stderr_queue.get_nowait()
-                        # Log mineru errors with WARNING level
                         if "warning" in line.lower():
                             logging.warning(f"[MinerU] {line}")
                         elif "error" in line.lower():
@@ -728,41 +760,15 @@ class MineruParser(Parser):
                             logging.info(f"[MinerU] {line}")
                 except Empty:
                     pass
-
-                # Small delay to prevent busy waiting
-                import time
-
-                time.sleep(0.1)
-
-            # Process any remaining output after process completion
-            try:
-                while True:
-                    prefix, line = stdout_queue.get_nowait()
-                    output_lines.append(line)
-                    logging.info(f"[MinerU] {line}")
-            except Empty:
-                pass
-
-            try:
-                while True:
-                    prefix, line = stderr_queue.get_nowait()
-                    if "warning" in line.lower():
-                        logging.warning(f"[MinerU] {line}")
-                    elif "error" in line.lower():
-                        logging.error(f"[MinerU] {line}")
-                        error_message = line.split("\n")[0]
-                        error_lines.append(error_message)
-                    else:
-                        logging.info(f"[MinerU] {line}")
-            except Empty:
-                pass
-
+            else:
+                error_lines = []
             # Wait for process to complete and get return code
             return_code = process.wait()
 
             # Wait for threads to finish
-            stdout_thread.join(timeout=5)
-            stderr_thread.join(timeout=5)
+            if orig_log:
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
 
             if return_code != 0 or error_lines:
                 logging.info("[MinerU] Command executed failed")
@@ -916,7 +922,7 @@ class MineruParser(Parser):
             backend = kwargs.get("backend", "")
             check_method = "vlm" if backend.startswith("vlm-") else method
             content_list, _ = self._read_output_files(
-                base_output_dir, name_without_suff, method=check_method
+                base_output_dir, name_without_suff, method=check_method, source_path=pdf_path
             )
             logging.info(f"Checked for existing output in {base_output_dir} {name_without_suff} {content_list and True}")
             if content_list:
