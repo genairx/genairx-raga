@@ -659,7 +659,7 @@ class MineruParser(Parser):
             logging.info(f"Executing mineru command: {' '.join(cmd)}")
 
             subprocess_kwargs = {}
-            orig_log = False.  # turn off output capture so the progress bars work..
+            orig_log = False  # turn off output capture so the progress bars work.
             if orig_log:
                 subprocess_kwargs = {
                     "stdout":  subprocess.PIPE,

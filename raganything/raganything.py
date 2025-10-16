@@ -8,6 +8,7 @@ This script integrates:
 """
 
 import os
+import traceback
 from typing import Dict, Any, Optional, Callable
 import sys
 import asyncio
@@ -145,7 +146,9 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                 asyncio.run(self.finalize_storages())
         except Exception as e:
             # Use print instead of logger since logger might be cleaned up already
-            print(f"Warning: Failed to finalize RAGAnything storages: {e}")
+            # print stack trace
+            asyncio.run(self.finalize_storages())
+            #print(f"Warning: Failed to finalize RAGAnything storages: {e}")
 
     def _create_context_config(self) -> ContextConfig:
         """Create context configuration from RAGAnything config"""

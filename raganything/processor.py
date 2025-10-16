@@ -258,7 +258,7 @@ class ProcessorMixin:
             await self.parse_cache.upsert(cache_data)
             # Ensure data is persisted to disk
             await self.parse_cache.index_done_callback()
-            self.logger.info(f"Stored parsing result in cache: {cache_key}")
+            self.logger.info(f"Stored parsing result in cache: {cache_key} = {doc_id}")
         except Exception as e:
             self.logger.warning(f"Error storing to parse cache: {e}")
 
@@ -306,7 +306,8 @@ class ProcessorMixin:
         )
         if cached_result is not None:
             content_list, doc_id = cached_result
-            self.logger.info(f"Using cached parsing result for: {file_path}")
+            self.logger.info(f"Using cached parsing result for: {file_path} {parse_method} {kwargs}")
+            self.logger.info(f"Cache key: {cache_key} -> {doc_id}")
             if display_stats:
                 self.logger.info(
                     f"* Total blocks in cached content_list: {len(content_list)}"
@@ -414,6 +415,7 @@ class ProcessorMixin:
         doc_id = self._generate_content_based_doc_id(content_list)
 
         # Store result in cache
+        self.logger.info(f"CACHE: store {cache_key} = {doc_id}")
         await self._store_cached_result(
             cache_key, content_list, doc_id, file_path, parse_method, **kwargs
         )
@@ -463,31 +465,35 @@ class ProcessorMixin:
         # Check multimodal processing status - handle LightRAG's early "PROCESSED" marking
         try:
             existing_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
-            if existing_doc_status:
-                # Check if multimodal content is already processed
-                multimodal_processed = existing_doc_status.get(
-                    "multimodal_processed", False
+            if not existing_doc_status:
+                # await self.lightrag.apipeline_enqueue_documents(self, "", doc_id, file_path)
+                # existing_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+                # if not existing_doc_status:
+                raise ValueError(f"Could not create document status for {doc_id}")
+            # Check if multimodal content is already processed
+            multimodal_processed = existing_doc_status.get(
+                "multimodal_processed", False
+            )
+
+            if multimodal_processed:
+                self.logger.info(
+                    f"Document {doc_id} multimodal content is already processed"
                 )
+                return
 
-                if multimodal_processed:
-                    self.logger.info(
-                        f"Document {doc_id} multimodal content is already processed"
-                    )
-                    return
-
-                # Even if status is "PROCESSED" (text processing done),
-                # we still need to process multimodal content if not yet done
-                doc_status = existing_doc_status.get("status", "")
-                if doc_status == "PROCESSED" and not multimodal_processed:
-                    self.logger.info(
-                        f"Document {doc_id} text processing is complete, but multimodal content still needs processing"
-                    )
-                    # Continue with multimodal processing
-                elif doc_status == "PROCESSED" and multimodal_processed:
-                    self.logger.info(
-                        f"Document {doc_id} is fully processed (text + multimodal)"
-                    )
-                    return
+            # Even if status is "PROCESSED" (text processing done),
+            # we still need to process multimodal content if not yet done
+            doc_status = existing_doc_status.get("status", "")
+            if doc_status == "PROCESSED" and not multimodal_processed:
+                self.logger.info(
+                    f"Document {doc_id} text processing is complete, but multimodal content still needs processing"
+                )
+                # Continue with multimodal processing
+            elif doc_status == "PROCESSED" and multimodal_processed:
+                self.logger.info(
+                    f"Document {doc_id} is fully processed (text + multimodal)"
+                )
+                return
 
         except Exception as e:
             self.logger.debug(f"Error checking document status for {doc_id}: {e}")
@@ -1316,28 +1322,27 @@ class ProcessorMixin:
 
     async def _mark_multimodal_processing_complete(self, doc_id: str):
         """Mark multimodal content processing as complete in the document status."""
-        try:
-            current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
-            if current_doc_status:
-                await self.lightrag.doc_status.upsert(
-                    {
-                        doc_id: {
-                            **current_doc_status,
-                            "multimodal_processed": True,
-                            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
-                        }
-                    }
-                )
-                await self.lightrag.doc_status.index_done_callback()
-                self.logger.info(
-                    f"Marked multimodal content processing as complete for document {doc_id}"
-                )
-            else:
-                raise Exception(f"Document {doc_id} not found in doc_status to mark multimodal processing complete")
-        except Exception as e:
-            self.logger.warning(
-                f"Error marking multimodal processing as complete for document {doc_id}: {e}"
-            )
+        # try:
+        current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+        if not current_doc_status:
+            raise ValueError(f"Could not create document status for {doc_id}")
+        await self.lightrag.doc_status.upsert(
+            {
+                doc_id: {
+                    **current_doc_status,
+                    "multimodal_processed": True,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+                }
+            }
+        )
+        await self.lightrag.doc_status.index_done_callback()
+        self.logger.info(
+            f"Marked multimodal content processing as complete for document {doc_id}"
+        )
+        # except Exception as e:
+        #     self.logger.warning(
+        #         f"Error marking multimodal processing as complete for document {doc_id}: {e}"
+        #     )
 
     async def is_document_fully_processed(self, doc_id: str) -> bool:
         """
@@ -1456,10 +1461,16 @@ class ProcessorMixin:
         content_list, content_based_doc_id = await self.parse_document(
             file_path, output_dir, parse_method, display_stats, **kwargs
         )
+        self.logger.info(f"Content based doc_id: {content_based_doc_id}")
 
         # Use provided doc_id or fall back to content-based doc_id
         if doc_id is None:
             doc_id = content_based_doc_id
+        else:
+            if content_based_doc_id != doc_id:
+                self.logger.warning(
+                    f"Doc id mismatch: {doc_id} != {content_based_doc_id}"
+                )
 
         # Step 2: Separate text and multimodal content
         text_content, multimodal_items = separate_content(content_list)
@@ -1484,6 +1495,16 @@ class ProcessorMixin:
                 split_by_character_only=split_by_character_only,
                 ids=doc_id,
             )
+        else:
+            self.logger.info(f"No pure text content found in document {doc_id}")
+            current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+            if not current_doc_status:
+                self.logger.info(f"Creating empty doc status for {doc_id}")
+                await self.lightrag.apipeline_enqueue_documents("", doc_id, file_path)
+                current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+                if not current_doc_status:
+                    raise ValueError(f"Could not create document status for {doc_id}")
+
 
         # Step 4: Process multimodal content (using specialized processors)
         if multimodal_items:
