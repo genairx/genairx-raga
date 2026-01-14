@@ -4,12 +4,14 @@ Document processing functionality for RAGAnything
 Contains methods for parsing documents and processing multimodal content
 """
 
+import base64
 import os
 import time
 import hashlib
 import json
 from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
+import google_crc32c
 
 from raganything.base import DocStatus
 from raganything.parser import MineruParser, DoclingParser, MineruExecutionError
@@ -30,7 +32,9 @@ class ProcessorMixin:
         self, file_path: Path, parse_method: str = None, **kwargs
     ) -> str:
         """
-        Generate cache key based on file path and parsing configuration
+        Generate cache key based on file content (CRC32C) and parsing configuration.
+        This avoids dependency on file path and mtime, which can be inconsistent
+        across different environments (e.g. local vs mounted GCS).
 
         Args:
             file_path: Path to the file
@@ -40,14 +44,20 @@ class ProcessorMixin:
         Returns:
             str: Cache key for the file and configuration
         """
-
-        # Get file modification time
-        mtime = file_path.stat().st_mtime
+        
+        # Calculate CRC32C of the file content
+        nb = 0
+        with open(file_path, "rb") as f:
+            checksum = google_crc32c.Checksum()
+            while chunk := f.read(1024 * 1024):  # Read in 1MB chunks
+                checksum.update(chunk)
+                nb += len(chunk)
+            file_crc = base64.b64encode(checksum.digest()).decode('utf-8')
+        self.logger.info(f"CRC32C: {nb} {file_crc} - {file_path}")
 
         # Create configuration dict for cache key
         config_dict = {
-            "file_path": str(file_path.absolute()),
-            "mtime": mtime,
+            "file_crc": file_crc,
             "parser": self.config.parser,
             "parse_method": parse_method or self.config.parse_method,
         }
@@ -73,6 +83,8 @@ class ProcessorMixin:
         # Generate hash from config
         config_str = json.dumps(config_dict, sort_keys=True)
         cache_key = hashlib.md5(config_str.encode()).hexdigest()
+
+        self.logger.info(f"Generated cache key: {cache_key} for config: {config_str}")
 
         return cache_key
 
@@ -116,7 +128,7 @@ class ProcessorMixin:
         return doc_id
 
     async def _get_cached_result(
-        self, cache_key: str, file_path: Path, parse_method: str = None, **kwargs
+        self, cache_key: str, file_path: Path, parse_method: str = None, check: bool = True, **kwargs
     ) -> tuple[List[Dict[str, Any]], str] | None:
         """
         Get cached parsing result if available and valid
@@ -125,25 +137,28 @@ class ProcessorMixin:
             cache_key: Cache key to look up
             file_path: Path to the file for mtime check
             parse_method: Parse method used
+            check: Whether to check for validity by mtime
             **kwargs: Additional parser parameters
 
         Returns:
             tuple[List[Dict[str, Any]], str] | None: (content_list, doc_id) or None if not found/invalid
         """
         if not hasattr(self, "parse_cache") or self.parse_cache is None:
+            self.logger.info(f"No parse_cache: {cache_key}")
             return None
 
         try:
             cached_data = await self.parse_cache.get_by_id(cache_key)
             if not cached_data:
+                self.logger.info(f"No data: {cache_key}")
                 return None
 
             # Check file modification time
             current_mtime = file_path.stat().st_mtime
             cached_mtime = cached_data.get("mtime", 0)
 
-            if current_mtime != cached_mtime:
-                self.logger.debug(f"Cache invalid - file modified: {cache_key}")
+            if check and current_mtime != cached_mtime:
+                self.logger.info(f"Cache invalid - file modified: {cache_key} ({check})")
                 return None
 
             # Check parsing configuration
@@ -172,19 +187,19 @@ class ProcessorMixin:
             current_config.update(relevant_kwargs)
 
             if cached_config != current_config:
-                self.logger.debug(f"Cache invalid - config changed: {cache_key}")
+                self.logger.info(f"Cache invalid - config changed: {cache_key}")
                 return None
 
-            content_list = cached_data.get("content_list", [])
+            content_list = cached_data.get("content_list")
             doc_id = cached_data.get("doc_id")
 
-            if content_list and doc_id:
+            if content_list is not None and doc_id:
                 self.logger.debug(
                     f"Found valid cached parsing result for key: {cache_key}"
                 )
                 return content_list, doc_id
             else:
-                self.logger.debug(
+                self.logger.info(
                     f"Cache incomplete - missing content or doc_id: {cache_key}"
                 )
                 return None
@@ -301,18 +316,18 @@ class ProcessorMixin:
         cache_key = self._generate_cache_key(file_path, parse_method, **kwargs)
 
         # Check cache first
-        cached_result = await self._get_cached_result(
-            cache_key, file_path, parse_method, **kwargs
-        )
-        if cached_result is not None:
-            content_list, doc_id = cached_result
-            self.logger.info(f"Using cached parsing result for: {file_path} {parse_method} {kwargs}")
-            self.logger.info(f"Cache key: {cache_key} -> {doc_id}")
-            if display_stats:
-                self.logger.info(
-                    f"* Total blocks in cached content_list: {len(content_list)}"
-                )
-            return content_list, doc_id
+        # cached_result = await self._get_cached_result(
+        #     cache_key, file_path, parse_method, **kwargs
+        # )
+        # if cached_result is not None:
+        #     content_list, doc_id = cached_result
+        #     self.logger.info(f"Using cached parsing result for: {file_path} {parse_method} {kwargs}")
+        #     self.logger.info(f"Cache key: {cache_key} -> {doc_id}")
+        #     if display_stats:
+        #         self.logger.info(
+        #             f"* Total blocks in cached content_list: {len(content_list)}"
+        #         )
+        #     return content_list, doc_id
 
         # Choose appropriate parsing method based on file extension
         ext = file_path.suffix.lower()
@@ -785,7 +800,7 @@ class ProcessorMixin:
                         "item_info": item_info,
                         "chunk_order_index": existing_chunks_count + index,
                         "processor": processor,  # Keep reference to the processor used
-                        "file_path": file_path,  # Add file_path to the result
+                        "file_path": str(file_path),  # Add file_path to the result
                     }
 
                 except Exception as e:
@@ -1455,6 +1470,9 @@ class ProcessorMixin:
         if display_stats is None:
             display_stats = self.config.display_content_stats
 
+        # Ensure file_path is a string to prevent issues with downstream functions
+        file_path = str(file_path)
+
         self.logger.info(f"Starting complete document processing: {file_path}")
 
         # Step 1: Parse document
@@ -1502,8 +1520,18 @@ class ProcessorMixin:
                 self.logger.info(f"Creating empty doc status for {doc_id}")
                 await self.lightrag.apipeline_enqueue_documents("", doc_id, file_path)
                 current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+                self.logger.info(f"Status: {current_doc_status} {file_path}")
                 if not current_doc_status:
                     raise ValueError(f"Could not create document status for {doc_id}")
+            
+            # Explicitly mark as PROCESSED if text content is empty
+            await self.lightrag.doc_status.upsert({
+                doc_id: {
+                    **current_doc_status,
+                    "status": DocStatus.PROCESSED,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+                }
+            })
 
 
         # Step 4: Process multimodal content (using specialized processors)

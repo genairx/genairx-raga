@@ -229,6 +229,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
 
     async def _ensure_lightrag_initialized(self):
         """Ensure LightRAG instance is initialized, create if necessary"""
+        self.logger.info("Ensuring LightRAG is initialized...")
         try:
             # Check parser installation first
             if not self._parser_installation_checked:
@@ -238,7 +239,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                         "Please install it using 'pip install' or 'uv pip install'."
                     )
                     self.logger.error(error_msg)
-                    return {"success": False, "error": error_msg}
+                    # return {"success": False, "error": error_msg}
 
                 self._parser_installation_checked = True
                 self.logger.info(f"Parser '{self.config.parser}' installation verified")
@@ -255,11 +256,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                             "Initializing storages for pre-provided LightRAG instance"
                         )
                         await self.lightrag.initialize_storages()
-                        from lightrag.kg.shared_storage import (
-                            initialize_pipeline_status,
-                        )
-
-                        await initialize_pipeline_status()
+                        await self.lightrag.initialize_pipeline_status()
 
                     # Initialize parse cache if not already done
                     if self.parse_cache is None:
@@ -300,8 +297,6 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                 self.logger.error(error_msg)
                 return {"success": False, "error": error_msg}
 
-            from lightrag.kg.shared_storage import initialize_pipeline_status
-
             # Prepare LightRAG initialization parameters
             lightrag_params = {
                 "working_dir": self.working_dir,
@@ -325,7 +320,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                 # Create LightRAG instance with merged parameters
                 self.lightrag = LightRAG(**lightrag_params)
                 await self.lightrag.initialize_storages()
-                await initialize_pipeline_status()
+                await self.lightrag.initialize_pipeline_status()
 
                 # Initialize parse cache storage using LightRAG's KV storage
                 self.parse_cache = self.lightrag.key_string_value_json_storage_cls(
@@ -342,6 +337,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                 self.logger.info(
                     "LightRAG, parse cache, and multimodal processors initialized"
                 )
+                self.logger.info("  Ensured.")
                 return {"success": True}
 
             except Exception as e:
@@ -399,6 +395,39 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
         except Exception as e:
             self.logger.error(f"Error during storage finalization: {e}")
             raise
+
+    async def flush(self):
+        """Flush the RAG database, closing and reloading storages."""
+        self.logger.info("Flushing RAGAnything state...")
+        await self.finalize_storages()
+        self.lightrag = None
+        self.parse_cache = None
+        self.modal_processors = {}
+
+        # Retry logic for re-initialization
+        max_retries = 3
+        retry_delay = 1.0
+
+        for attempt in range(max_retries):
+            result = await self._ensure_lightrag_initialized()
+            if result and result.get("success", False):
+                return
+
+            error_msg = result.get("error", "Unknown error")
+            # Check for transient JSON error
+            if "JSONDecodeError" in error_msg or "Expecting ',' delimiter" in error_msg:
+                if attempt < max_retries - 1:
+                    self.logger.warning(
+                        f"Transient error re-initializing LightRAG in flush (attempt {attempt+1}/{max_retries}): {error_msg}. Retrying in {retry_delay}s..."
+                    )
+                    # Reset lightrag to None to force recreation from scratch
+                    self.lightrag = None
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+
+            self.logger.error(f"Failed to re-initialize LightRAG in flush: {error_msg}")
+            raise RuntimeError(f"Failed to re-initialize LightRAG in flush: {error_msg}")
 
     def check_parser_installation(self) -> bool:
         """

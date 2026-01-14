@@ -921,11 +921,18 @@ class MineruParser(Parser):
             # Check for existing fresh output
             backend = kwargs.get("backend", "")
             check_method = "vlm" if backend.startswith("vlm-") else method
+
+            # Pop source_path from kwargs to prevent it from being passed to _run_mineru_command
+            source_path = kwargs.pop("source_path", pdf_path)
+
             content_list, _ = self._read_output_files(
-                base_output_dir, name_without_suff, method=check_method, source_path=pdf_path
+                base_output_dir,
+                name_without_suff,
+                method=check_method,
+                source_path=source_path,
             )
-            logging.info(f"Checked for existing output in {base_output_dir} {name_without_suff} {content_list and True}")
-            if content_list:
+            logging.info(f"Checked for existing output in {base_output_dir} {name_without_suff} {content_list is not None}")
+            if content_list is not None:
                 logging.info(f"  Using existing output for {pdf_path.name}")
                 return content_list
 
@@ -1070,7 +1077,7 @@ class MineruParser(Parser):
 
             # Check for existing fresh output
             content_list, _ = self._read_output_files(
-                base_output_dir, name_without_suff, method="ocr", source_path=actual_image_path
+                base_output_dir, name_without_suff, method="ocr", source_path=image_path
             )
             if content_list is not None:
                 return content_list
@@ -1139,7 +1146,11 @@ class MineruParser(Parser):
 
             # Parse the converted PDF
             return self.parse_pdf(
-                pdf_path=pdf_path, output_dir=output_dir, lang=lang, **kwargs
+                pdf_path=pdf_path,
+                output_dir=output_dir,
+                lang=lang,
+                source_path=doc_path,
+                **kwargs,
             )
 
         except Exception as e:
@@ -1173,7 +1184,11 @@ class MineruParser(Parser):
 
             # Parse the converted PDF
             return self.parse_pdf(
-                pdf_path=pdf_path, output_dir=output_dir, lang=lang, **kwargs
+                pdf_path=pdf_path,
+                output_dir=output_dir,
+                lang=lang,
+                source_path=text_path,
+                **kwargs,
             )
 
         except Exception as e:
