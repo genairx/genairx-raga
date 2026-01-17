@@ -93,6 +93,20 @@ class Parser:
                 base_output_dir = doc_path.parent / "libreoffice_output"
 
             base_output_dir.mkdir(parents=True, exist_ok=True)
+            final_pdf_path = base_output_dir / f"{name_without_suff}.pdf"
+            if final_pdf_path.exists():
+                logging.info(f"PDF already exists: {final_pdf_path}:")
+                def fts(path):
+                    from datetime import datetime
+                    return datetime.fromtimestamp(path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S') + \
+                            f" (size: {path.stat().st_size} bytes)" + f" {path}"
+                logging.info(f"  {fts(doc_path)}")
+                logging.info(f"  {fts(final_pdf_path)}")
+                if final_pdf_path.stat().st_mtime >= doc_path.stat().st_mtime:
+                    logging.info(f"PDF is up-to-date, skipping conversion.")
+                    return final_pdf_path
+            else:
+                logging.info(f"PDF does not exist, converting: {final_pdf_path}")
 
             # Create temporary directory for PDF conversion
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -190,7 +204,6 @@ class Parser:
                     )
 
                 # Copy PDF to final output directory
-                final_pdf_path = base_output_dir / f"{name_without_suff}.pdf"
                 import shutil
 
                 shutil.copy2(pdf_path, final_pdf_path)
@@ -840,6 +853,12 @@ class MineruParser(Parser):
                         f"Found fresh output for {source_path.name}, skipping regeneration."
                     )
                 else:
+                    from datetime import datetime
+                    def fts(ts):
+                        return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+                    logging.info(f"    {fts(source_mtime)} {source_path}")
+                    logging.info(f"    > {fts(md_file.stat().st_mtime)} {md_file} or ")
+                    logging.info(f"    > {fts(json_file.stat().st_mtime)} {json_file}")
                     logging.info(f"  stale output for {source_path.name}, regenerating.")
                     return None, ""  # Output is stale
             else:
