@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lightrag import LightRAG
 from lightrag.utils import logger
+from lightrag.kg.shared_storage import initialize_pipeline_status
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -321,6 +322,7 @@ class RAGAnything(QueryMixin, ProcessorMixin, BatchMixin):
                 self.lightrag = LightRAG(**lightrag_params)
                 await self.lightrag.initialize_storages()
                 await self.lightrag.initialize_pipeline_status()
+                await initialize_pipeline_status()
 
                 # Initialize parse cache storage using LightRAG's KV storage
                 self.parse_cache = self.lightrag.key_string_value_json_storage_cls(
