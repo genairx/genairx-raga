@@ -53,7 +53,7 @@ class ProcessorMixin:
                 checksum.update(chunk)
                 nb += len(chunk)
             file_crc = base64.b64encode(checksum.digest()).decode('utf-8')
-        self.logger.info(f"CRC32C: {nb} {file_crc} - {file_path}")
+        # self.logger.info(f"CRC32C: {nb} {file_crc} - {file_path}")
 
         # Create configuration dict for cache key
         config_dict = {
@@ -84,7 +84,7 @@ class ProcessorMixin:
         config_str = json.dumps(config_dict, sort_keys=True)
         cache_key = hashlib.md5(config_str.encode()).hexdigest()
 
-        self.logger.info(f"Generated cache key: {cache_key} for config: {config_str}")
+        # self.logger.info(f"Generated cache key: {cache_key} for config: {config_str}")
 
         return cache_key
 
