@@ -1860,6 +1860,27 @@ class ProcessorMixin:
                 split_by_character_only=split_by_character_only,
                 ids=doc_id,
             )
+        else:
+            self.logger.info(f"No pure text content found in document {doc_id}")
+            current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+            if not current_doc_status:
+                self.logger.info(f"Creating empty doc status for {doc_id}")
+                await self.lightrag.apipeline_enqueue_documents("", doc_id, file_path)
+                current_doc_status = await self.lightrag.doc_status.get_by_id(doc_id)
+                self.logger.info(f"Status: {current_doc_status} {file_path}")
+                if not current_doc_status:
+                    raise ValueError(f"Could not create document status for {doc_id}")
+
+            # Explicitly mark as PROCESSED if text content is empty
+            await self.lightrag.doc_status.upsert(
+                {
+                    doc_id: {
+                        **current_doc_status,
+                        "status": DocStatus.PROCESSED,
+                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+                    }
+                }
+            )
 
         # Step 3: Process multimodal content (using specialized processors)
         if multimodal_items:
